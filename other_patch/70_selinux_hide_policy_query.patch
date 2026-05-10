@@ -1,8 +1,8 @@
 diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
-index e5d1431..50978c5 100644
+index e5d1431..f26f7ce 100644
 --- a/security/selinux/ss/services.c
 +++ b/security/selinux/ss/services.c
-@@ -945,6 +945,283 @@ static void avd_init(struct selinux_policy *policy, struct av_decision *avd)
+@@ -945,6 +945,373 @@ static void avd_init(struct selinux_policy *policy, struct av_decision *avd)
  	avd->flags = 0;
  }
  
@@ -29,6 +29,14 @@ index e5d1431..50978c5 100644
 +	"magisk_file",
 +	"lsposed_file",
 +};
++
++static struct selinux_policy *selinux_hidden_backup_policy(void)
++{
++	if (!&backup_sepolicy)
++		return NULL;
++
++	return READ_ONCE(backup_sepolicy);
++}
 +
 +static bool selinux_hidden_av_query_caller(struct policydb *policydb,
 +					   struct sidtab *sidtab)
@@ -74,6 +82,93 @@ index e5d1431..50978c5 100644
 +	       !strncmp(type_start, type, field_len);
 +}
 +
++static bool selinux_hidden_context_part(const char **cursor,
++					const char *end,
++					const char **part,
++					size_t *part_len)
++{
++	const char *p;
++
++	if (*cursor >= end)
++		return false;
++
++	p = *cursor;
++	while (p < end && *p != ':')
++		p++;
++	if (p == *cursor)
++		return false;
++
++	*part = *cursor;
++	*part_len = p - *cursor;
++	*cursor = p < end ? p + 1 : p;
++
++	return true;
++}
++
++static bool selinux_hidden_symtab_has_name(struct symtab *symtab,
++					   const char *name, size_t name_len,
++					   bool type_symbol)
++{
++	struct type_datum *type;
++	char *name_copy;
++	void *datum;
++
++	name_copy = kmemdup_nul(name, name_len, GFP_ATOMIC);
++	if (!name_copy)
++		return false;
++
++	datum = symtab_search(symtab, name_copy);
++	type = type_symbol ? datum : NULL;
++	if (type && type->attribute)
++		datum = NULL;
++
++	kfree(name_copy);
++
++	return datum != NULL;
++}
++
++static bool selinux_hidden_context_in_policy(struct policydb *policydb,
++					     const char *scontext,
++					     u32 scontext_len)
++{
++	const char *cursor;
++	const char *end;
++	const char *user;
++	const char *role;
++	const char *type;
++	size_t user_len;
++	size_t role_len;
++	size_t type_len;
++
++	end = scontext + strnlen(scontext, scontext_len);
++	cursor = scontext;
++
++	if (!selinux_hidden_context_part(&cursor, end, &user, &user_len) ||
++	    !selinux_hidden_context_part(&cursor, end, &role, &role_len) ||
++	    !selinux_hidden_context_part(&cursor, end, &type, &type_len))
++		return false;
++
++	return selinux_hidden_symtab_has_name(&policydb->p_users, user,
++					      user_len, false) &&
++	       selinux_hidden_symtab_has_name(&policydb->p_roles, role,
++					      role_len, false) &&
++	       selinux_hidden_symtab_has_name(&policydb->p_types, type,
++					      type_len, true);
++}
++
++static bool selinux_hide_context_query_with_backup(const char *scontext,
++						   u32 scontext_len)
++{
++	struct selinux_policy *hidden_policy;
++
++	hidden_policy = selinux_hidden_backup_policy();
++	if (!hidden_policy)
++		return false;
++
++	return !selinux_hidden_context_in_policy(&hidden_policy->policydb,
++						 scontext, scontext_len);
++}
++
 +static bool selinux_hide_context_validity_query(struct policydb *policydb,
 +						struct sidtab *sidtab,
 +						const char *scontext,
@@ -83,6 +178,9 @@ index e5d1431..50978c5 100644
 +
 +	if (!selinux_hidden_av_query_caller(policydb, sidtab))
 +		return false;
++
++	if (selinux_hide_context_query_with_backup(scontext, scontext_len))
++		return true;
 +
 +	for (i = 0; i < ARRAY_SIZE(selinux_hidden_context_types); i++) {
 +		if (selinux_hidden_context_has_type(
@@ -100,14 +198,6 @@ index e5d1431..50978c5 100644
 +	avd->auditallow = 0;
 +	avd->auditdeny = 0xffffffff;
 +	avd->flags = 0;
-+}
-+
-+static struct selinux_policy *selinux_hidden_backup_policy(void)
-+{
-+	if (!&backup_sepolicy)
-+		return NULL;
-+
-+	return READ_ONCE(backup_sepolicy);
 +}
 +
 +static int selinux_hidden_context_to_policy(struct policydb *oldp,
@@ -286,7 +376,7 @@ index e5d1431..50978c5 100644
  void services_compute_xperms_decision(struct extended_perms_decision *xpermd,
  					struct avtab_node *node)
  {
-@@ -1201,6 +1478,8 @@ void security_compute_av_user(u32 ssid,
+@@ -1201,6 +1568,8 @@ void security_compute_av_user(u32 ssid,
  
  	context_struct_compute_av(policydb, scontext, tcontext, tclass, avd,
  				  NULL);
@@ -295,7 +385,7 @@ index e5d1431..50978c5 100644
   out:
  	rcu_read_unlock();
  	return;
-@@ -1544,6 +1823,12 @@ retry:
+@@ -1544,6 +1913,12 @@ retry:
  	policy = rcu_dereference(selinux_state.policy);
  	policydb = &policy->policydb;
  	sidtab = policy->sidtab;
