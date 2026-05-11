@@ -375,6 +375,11 @@ jobs:
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_ksu.patch || true
+            # Keep upstream KernelSU selinux_hide LSM hook linked after the SUSFS patch.
+            if grep -q 'ksu_selinux_hide_init' kernel/core/init.c && ! grep -q 'hook/lsm_hook.o' kernel/Kbuild; then
+              sed -i '/kernelsu-objs += hook\/setuid_hook.o/i\kernelsu-objs += hook/lsm_hook.o' kernel/Kbuild
+              echo "Restored hook/lsm_hook.o for upstream selinux_hide"
+            fi
             # Workaround: SUSFS patch removes ksu_late_loaded but latest KernelSU still uses it
             if ! grep -q 'bool ksu_late_loaded;' kernel/core/init.c; then
               sed -i '/^struct cred \*ksu_cred;$/a\bool ksu_late_loaded;' kernel/core/init.c
