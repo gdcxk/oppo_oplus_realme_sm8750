@@ -5,7 +5,8 @@ index e5d1431..f26f7ce 100644
 @@ -945,6 +945,373 @@ static void avd_init(struct selinux_policy *policy, struct av_decision *avd)
  	avd->flags = 0;
  }
- 
++
++#include <linux/cred.h>
 +extern struct selinux_policy *backup_sepolicy __attribute__((weak));
 +
 +struct selinux_hidden_av_rule {
@@ -20,6 +21,7 @@ index e5d1431..f26f7ce 100644
 +	{ "untrusted_app", "magisk", "binder", "call" },
 +	{ "untrusted_app", "ksu", "binder", "call" },
 +	{ "untrusted_app", "lsposed_file", "file", "read" },
++	{ "zygote", "adb_data_file", "dir", "search" },
 +};
 +
 +static const char * const selinux_hidden_context_types[] = {
@@ -38,19 +40,9 @@ index e5d1431..f26f7ce 100644
 +	return READ_ONCE(backup_sepolicy);
 +}
 +
-+static bool selinux_hidden_av_query_caller(struct policydb *policydb,
-+					   struct sidtab *sidtab)
++static bool selinux_hidden_av_query_caller(void)
 +{
-+	struct context *ccontext;
-+	const char *ctype;
-+
-+	ccontext = sidtab_search(sidtab, current_sid());
-+	if (!ccontext)
-+		return false;
-+
-+	ctype = sym_name(policydb, SYM_TYPES, ccontext->type - 1);
-+
-+	return ctype && !strcmp(ctype, "app_zygote");
++	return current_uid().val >= 10000;
 +}
 +
 +static bool selinux_hidden_context_has_type(const char *scontext,
@@ -176,7 +168,7 @@ index e5d1431..f26f7ce 100644
 +{
 +	unsigned int i;
 +
-+	if (!selinux_hidden_av_query_caller(policydb, sidtab))
++	if (!selinux_hidden_av_query_caller())
 +		return false;
 +
 +	if (selinux_hide_context_query_with_backup(scontext, scontext_len))
@@ -258,7 +250,7 @@ index e5d1431..f26f7ce 100644
 +	if (!hidden_policy)
 +		return false;
 +
-+	if (!selinux_hidden_av_query_caller(policydb, sidtab))
++	if (!selinux_hidden_av_query_caller())
 +		return false;
 +
 +	hidden_policydb = &hidden_policy->policydb;
@@ -344,7 +336,7 @@ index e5d1431..f26f7ce 100644
 +	if (!avd->allowed)
 +		return;
 +
-+	if (!selinux_hidden_av_query_caller(policydb, sidtab))
++	if (!selinux_hidden_av_query_caller())
 +		return;
 +
 +	tclass_datum = policydb->class_val_to_struct[tclass - 1];
